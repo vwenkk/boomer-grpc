@@ -435,6 +435,18 @@ func Int64ToBytes(n int64) []byte {
 	return bytesBuf.Bytes()
 }
 
+func Int32ToBytes(n int32) []byte {
+	bytesBuf := bytes.NewBuffer([]byte{})
+	_ = binary.Write(bytesBuf, binary.BigEndian, n)
+	return bytesBuf.Bytes()
+}
+
+func StringToBytes(n string) []byte {
+	bytesBuf := bytes.NewBuffer([]byte{})
+	_ = binary.Write(bytesBuf, binary.BigEndian, n)
+	return bytesBuf.Bytes()
+}
+
 func BytesToInt64(bys []byte) (data int64) {
 	byteBuff := bytes.NewBuffer(bys)
 	_ = binary.Read(byteBuff, binary.BigEndian, &data)
@@ -467,6 +479,20 @@ func sha256HMAC(key []byte, data []byte) []byte {
 	mac := hmac.New(sha256.New, key)
 	mac.Write(data)
 	return []byte(fmt.Sprintf("%x", mac.Sum(nil)))
+}
+
+func MaxInt64(x, y int64) int64 {
+	if x > y {
+		return x
+	}
+	return y
+}
+
+func MinInt64(x, y int64) int64 {
+	if x < y {
+		return x
+	}
+	return y
 }
 
 // ver: auth-v1or auth-v2

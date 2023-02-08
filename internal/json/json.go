@@ -1,11 +1,11 @@
 package json
 
 import (
-	jsoniter "github.com/json-iterator/go"
+	"encoding/json"
 )
 
 // replace with third-party json library to improve performance
-var json = jsoniter.ConfigCompatibleWithStandardLibrary
+//var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 var (
 	Marshal       = json.Marshal
@@ -13,5 +13,5 @@ var (
 	Unmarshal     = json.Unmarshal
 	NewDecoder    = json.NewDecoder
 	NewEncoder    = json.NewEncoder
-	Get           = json.Get
+	//Get           = json.Get
 )

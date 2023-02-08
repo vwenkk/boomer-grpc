@@ -228,7 +228,7 @@ func serverUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.Una
 }
 
 // serverWrappedStream wraps around the embedded grpc.ServerStream, and intercepts the RecvMsg and
-// SendMsg method call.
+// SendMsg Method call.
 type serverWrappedStream struct {
 	grpc.ServerStream
 }

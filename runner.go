@@ -1,6 +1,7 @@
 package boomer
 
 import (
+	"boomer/internal/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -316,7 +317,9 @@ func (r *runner) outputOnEvent(data map[string]interface{}) {
 }
 
 func (r *runner) outputOnStop() {
+	r.mutex.Lock()
 	defer func() {
+		r.mutex.Unlock()
 		r.outputs = make([]Output, 0)
 	}()
 	size := len(r.outputs)
@@ -336,14 +339,14 @@ func (r *runner) outputOnStop() {
 
 func (r *runner) reportStats() {
 	data := r.stats.collectReportData()
-	data["user_count"] = r.controller.getCurrentClientsNum()
-	data["state"] = atomic.LoadInt32(&r.state)
-	r.outputOnEvent(data)
+	data.UserCount = r.controller.getCurrentClientsNum()
+	data.State = atomic.LoadInt32(&r.state)
+	r.outputOnEvent(data.serialize())
 }
 
 func (r *runner) reportTestResult() {
 	// convert stats in total
-	var statsTotal interface{} = r.stats.total.serialize()
+	var statsTotal interface{} = r.stats.total
 	entryTotalOutput, err := deserializeStatsEntry(statsTotal)
 	if err != nil {
 		return
@@ -1029,6 +1032,46 @@ func (r *workerRunner) close() {
 
 }
 
+func (r *workerRunner) statsStart() {
+	ticker := time.NewTicker(reportStatsInterval)
+	for {
+		select {
+		// record stats
+		case t := <-r.stats.transactionChan:
+			r.stats.logTransaction(t.name, t.success, t.elapsedTime, t.contentSize)
+		case m := <-r.stats.requestSuccessChan:
+			r.stats.logRequest(m.requestType, m.name, m.responseTime, m.responseLength)
+		case n := <-r.stats.requestFailureChan:
+			r.stats.logRequest(n.requestType, n.name, n.responseTime, 0)
+			r.stats.logError(n.requestType, n.name, n.errMsg)
+		// report stats
+		case <-ticker.C:
+			r.reportStats()
+			// close reportedChan and return if the last stats is reported successfully
+			if !r.isStarting() && !r.isStopping() {
+				close(r.reportedChan)
+				log.Info().Msg("Quitting statsStart")
+				return
+			}
+		}
+	}
+}
+func (r *workerRunner) reportStats() {
+	data := r.stats.collectReportData()
+	data.UserCount = r.controller.getCurrentClientsNum()
+	data.State = atomic.LoadInt32(&r.state)
+	marshal, _ := json.Marshal(data)
+	if v, ok := data.Errors["414c4bd7f97032994c52c7f8c734d019"]; ok {
+		fmt.Println("workerRunner fmt.Println(Occurrences)", v.Occurrences)
+		fmt.Println("aaaaaaa")
+	}
+	r.client.sendChannel() <- newGenericMessage("stats", map[string][]byte{
+		"data": marshal,
+	}, r.nodeID)
+	// 上报master
+
+}
+
 // masterRunner controls worker to spawn goroutines and collect stats.
 type masterRunner struct {
 	runner
@@ -1164,7 +1207,31 @@ func (r *masterRunner) clientListener() {
 					}
 
 				case typeException:
-					// Todo
+				// Todo
+				case typeStats:
+					data := msg.Data
+					if _, ok := data["data"]; ok {
+						workerReportData := &workerReport{}
+						err := json.Unmarshal(data["data"], workerReportData)
+						if err != nil {
+							return
+						}
+						stats := workerReportData.Stats
+						errorStats := workerReportData.Errors
+						for _, statData := range stats {
+							r.stats.get(statData.Name, statData.Method).extend(statData)
+						}
+
+						for errorKey, errorStat := range errorStats {
+							if _, ok = r.stats.errors[errorKey]; ok {
+								r.stats.errors[errorKey].Occurrences += errorStat.Occurrences
+							} else {
+								r.stats.errors[errorKey] = errorStat
+							}
+						}
+						r.stats.total.extend(workerReportData.StatsTotal)
+					}
+
 				default:
 				}
 			}()
@@ -1262,6 +1329,7 @@ func (r *masterRunner) run() {
 
 	// listen and record heartbeat from worker
 	r.heartbeatWorker()
+
 	<-r.closeChan
 }
 
@@ -1402,6 +1470,7 @@ func (r *masterRunner) onQuiting() {
 			Type: "quit",
 		})
 	}
+	r.outputOnStop()
 	r.updateState(StateQuitting)
 }
 
@@ -1422,6 +1491,7 @@ func (r *masterRunner) reportStats() {
 	table.SetColMinWidth(2, 10)
 	table.SetHeader([]string{"Worker ID", "IP", "State", "Current Users", "CPU Usage (%)", "Memory Usage (%)"})
 
+	totalUserCount := int64(0)
 	for _, worker := range r.server.getAllWorkers() {
 		row := make([]string, 6)
 		row[0] = worker.ID
@@ -1431,12 +1501,17 @@ func (r *masterRunner) reportStats() {
 		row[4] = fmt.Sprintf("%.2f", worker.CPUUsage)
 		row[5] = fmt.Sprintf("%.2f", worker.MemoryUsage)
 		table.Append(row)
+		totalUserCount += worker.UserCount
 	}
 	table.Render()
 	println()
 
-	//data := r.stats.collectReportData()
-	//data["user_count"] = r.controller.getCurrentClientsNum()
-	//data["state"] = atomic.LoadInt32(&r.state)
-	//r.outputOnEvent(data)
+	data := r.stats.collectReportData()
+	data.UserCount = totalUserCount
+	data.State = atomic.LoadInt32(&r.state)
+	if v, ok := data.Errors["414c4bd7f97032994c52c7f8c734d019"]; ok {
+		fmt.Println("masterRunner fmt.Println(Occurrences)", v.Occurrences)
+	}
+
+	r.outputOnEvent(data.serialize())
 }

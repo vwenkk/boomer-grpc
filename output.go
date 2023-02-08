@@ -175,45 +175,35 @@ type dataOutput struct {
 }
 
 func convertData(data map[string]interface{}) (output *dataOutput, err error) {
-	userCount, ok := data["user_count"].(int64)
-	if !ok {
-		return nil, fmt.Errorf("user_count is not int32")
+	marshal, _ := json.Marshal(data)
+	reportData := &workerReport{}
+	err = json.Unmarshal(marshal, &reportData)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal is err: %s", err.Error())
 	}
-	state, ok := data["state"].(int32)
-	if !ok {
-		return nil, fmt.Errorf("state is not int32")
-	}
-	stats, ok := data["stats"].([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("stats is not []interface{}")
-	}
+	userCount := reportData.UserCount
 
-	errors := data["errors"].(map[string]map[string]interface{})
+	state := reportData.State
+	stats := reportData.Stats
 
-	transactions, ok := data["transactions"].(map[string]int64)
-	if !ok {
-		return nil, fmt.Errorf("transactions is not map[string]int64")
-	}
-	transactionsPassed := transactions["passed"]
-	transactionsFailed := transactions["failed"]
-
-	// convert stats in total
-	statsTotal, ok := data["stats_total"].(interface{})
-	if !ok {
-		return nil, fmt.Errorf("stats_total is not interface{}")
-	}
+	statsTotal := reportData.StatsTotal
 	entryTotalOutput, err := deserializeStatsEntry(statsTotal)
 	if err != nil {
 		return nil, err
 	}
 
+	errorsData := make(map[string]map[string]interface{})
+	for k, statsError := range reportData.Errors {
+		errorsData[k] = statsError.toMap()
+	}
+
 	output = &dataOutput{
-		UserCount:            userCount,
+		UserCount:            int64(userCount),
 		State:                state,
 		Duration:             entryTotalOutput.duration,
 		TotalStats:           entryTotalOutput,
-		TransactionsPassed:   transactionsPassed,
-		TransactionsFailed:   transactionsFailed,
+		TransactionsPassed:   0,
+		TransactionsFailed:   0,
 		TotalAvgResponseTime: entryTotalOutput.avgResponseTime,
 		TotalMaxResponseTime: float64(entryTotalOutput.MaxResponseTime),
 		TotalMinResponseTime: float64(entryTotalOutput.MinResponseTime),
@@ -221,7 +211,7 @@ func convertData(data map[string]interface{}) (output *dataOutput, err error) {
 		TotalFailRatio:       getTotalFailRatio(entryTotalOutput.NumRequests, entryTotalOutput.NumFailures),
 		TotalFailPerSec:      entryTotalOutput.currentFailPerSec,
 		Stats:                make([]*statsEntryOutput, 0, len(stats)),
-		Errors:               errors,
+		Errors:               errorsData,
 	}
 
 	// convert stats
@@ -279,63 +269,63 @@ var (
 			Name: "num_requests",
 			Help: "The number of requests",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 	gaugeNumFailures = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "num_failures",
 			Help: "The number of failures",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 	gaugeMedianResponseTime = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "median_response_time",
 			Help: "The median response time",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 	gaugeAverageResponseTime = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "average_response_time",
 			Help: "The average response time",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 	gaugeMinResponseTime = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "min_response_time",
 			Help: "The min response time",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 	gaugeMaxResponseTime = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "max_response_time",
 			Help: "The max response time",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 	gaugeAverageContentLength = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "average_content_length",
 			Help: "The average content length",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 	gaugeCurrentRPS = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "current_rps",
 			Help: "The current requests per second",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 	gaugeCurrentFailPerSec = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "current_fail_per_sec",
 			Help: "The current failure number per second",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 )
 
@@ -346,21 +336,21 @@ var (
 			Name: "errors",
 			Help: "The errors of load testing",
 		},
-		[]string{"method", "name", "error"},
+		[]string{"Method", "Name", "error"},
 	)
 	counterTotalNumRequests = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "total_num_requests",
 			Help: "The number of requests in total",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 	counterTotalNumFailures = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "total_num_failures",
 			Help: "The number of failures in total",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 )
 
@@ -378,7 +368,7 @@ var (
 			AgeBuckets: 1,
 			MaxAge:     100000 * time.Second,
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 )
 
@@ -413,14 +403,14 @@ var (
 			Name: "total_min_response_time",
 			Help: "The min response time in total milliseconds",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 	gaugeTotalMaxResponseTime = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "total_max_response_time",
 			Help: "The max response time in total milliseconds",
 		},
-		[]string{"method", "name"},
+		[]string{"Method", "Name"},
 	)
 	gaugeTotalRPS = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -518,6 +508,10 @@ func (o *PrometheusPusherOutput) OnStop() {
 	gaugeState.Set(float64(StateStopped))
 	if err := o.pusher.Push(); err != nil {
 		log.Error().Err(err).Msg("push to Pushgateway failed")
+	}
+	err := o.pusher.Delete()
+	if err != nil {
+		log.Error().Err(err).Msg("delete pushgateway failed")
 	}
 }
 
